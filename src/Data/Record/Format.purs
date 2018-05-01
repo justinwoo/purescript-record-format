@@ -1,10 +1,16 @@
 module Data.Record.Format where
 
-import Prelude (identity, (<>), class Show, show)
-import Type.Data.Symbol (class IsSymbol, SProxy (..), reflectSymbol)
+import Prelude
+
+import Data.Either (Either(..))
+import Data.Maybe (Maybe(..), maybe)
 import Data.Record (get)
-import Prim.Symbol as Symbol
+import Data.Record.Builder (Builder)
+import Data.Record.Builder as Builder
+import Data.String (Pattern(..), indexOf, splitAt, stripPrefix)
 import Prim.Row as Row
+import Prim.Symbol as Symbol
+import Type.Data.Symbol (class IsSymbol, SProxy(..), reflectSymbol)
 
 --------------------------------------------------------------------------------
 -- * Format strings
@@ -108,3 +114,59 @@ else instance dParseVar ::
 
 parse :: forall i o. Parse i o => SProxy i -> FProxy o
 parse _ = FProxy :: FProxy o
+
+-- Parse String
+
+-- take FList, literal match and make builder?
+class ParseURL (url :: Symbol) (row :: # Type) where
+  parseURL :: SProxy url -> String -> Either String { | row }
+
+instance parseStringInst ::
+  ( Parse url xs
+  , ParseURLImpl xs () row
+  ) => ParseURL url row where
+  parseURL _ s = do
+    builder <- parseURLImpl (FProxy :: FProxy xs) s
+    pure $ Builder.build builder {}
+
+class ParseURLImpl (xs :: FList) (from :: # Type) (to :: # Type)
+  | xs -> from to where
+  parseURLImpl
+    :: FProxy xs
+    -> String
+    -> Either String (Builder { | from } { | to })
+
+instance nilParseURLImpl :: ParseURLImpl FNil () () where
+  parseURLImpl _ remaining = pure identity
+
+instance consVarParseURLImpl ::
+  ( IsSymbol name
+  , Row.Cons name String from' to
+  , Row.Lacks name from'
+  , ParseURLImpl tail from from'
+  ) => ParseURLImpl (FCons (Var name) tail) from to where
+  parseURLImpl _ s = do
+    split' <- split
+    let first = Builder.insert nameP split'.before
+    rest <- parseURLImpl (FProxy :: FProxy tail) split'.after
+    pure $ first <<< rest
+    where
+      nameP = SProxy :: SProxy name
+      name = reflectSymbol nameP
+      split :: Either String { before :: String, after :: String }
+      split = maybe (Left "error") Right $ case indexOf (Pattern "/") s of
+        Just idx -> splitAt idx s
+        Nothing -> pure { before: s, after: "" }
+
+else instance consLitParseURLImpl ::
+  ( IsSymbol segment
+  , ParseURLImpl tail from to
+  ) => ParseURLImpl (FCons (Lit segment) tail) from to where
+  parseURLImpl _ s =
+    case stripPrefix (Pattern segment) s of
+      Nothing ->
+        Left $ "could not strip segment " <> segment <> " from path " <> s
+      Just remaining ->
+        parseURLImpl (FProxy :: FProxy tail) remaining
+    where
+      segment = reflectSymbol (SProxy :: SProxy segment)
