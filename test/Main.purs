@@ -3,7 +3,7 @@ module Test.Main where
 import Prelude
 
 import Data.Either (Either(..))
-import Data.Record.Format (format, parseURL)
+import Data.Record.Format (convertRecord, format, parseURL)
 import Effect (Effect)
 import Effect.Console (log)
 import Test.Assert (assert)
@@ -26,3 +26,13 @@ main = do
     Right r -> do
       assert $ r.name == "Bill"
       assert $ r.age == "12"
+
+  let parseURL2' = parseURL (SProxy :: SProxy "/hello/{name}/{age}")
+  let parsed2 = parseURL2' "/hello/Bill/12"
+  case convertRecord =<< parsed of
+    Left e -> do
+      log $ "didn't work: " <> e
+      assert $ 1 == 2
+    Right (r :: { name :: String, age :: Int }) -> do
+      assert $ r.name == "Bill"
+      assert $ r.age == 12

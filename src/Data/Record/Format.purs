@@ -3,14 +3,19 @@ module Data.Record.Format where
 import Prelude
 
 import Data.Either (Either(..))
+import Data.Int (fromNumber)
 import Data.Maybe (Maybe(..), maybe)
 import Data.Record (get)
+import Data.Record as Record
 import Data.Record.Builder (Builder)
 import Data.Record.Builder as Builder
 import Data.String (Pattern(..), indexOf, splitAt, stripPrefix)
+import Global (readInt)
 import Prim.Row as Row
+import Prim.RowList as RL
 import Prim.Symbol as Symbol
 import Type.Data.Symbol (class IsSymbol, SProxy(..), reflectSymbol)
+import Type.Prelude (RLProxy(..))
 
 --------------------------------------------------------------------------------
 -- * Format strings
@@ -125,9 +130,9 @@ instance parseStringInst ::
   ( Parse url xs
   , ParseURLImpl xs () row
   ) => ParseURL url row where
-  parseURL _ s = do
-    builder <- parseURLImpl (FProxy :: FProxy xs) s
-    pure $ Builder.build builder {}
+  parseURL _ s
+      = Builder.build <@> {}
+    <$> parseURLImpl (FProxy :: FProxy xs) s
 
 class ParseURLImpl (xs :: FList) (from :: # Type) (to :: # Type)
   | xs -> from to where
@@ -170,3 +175,58 @@ else instance consLitParseURLImpl ::
         parseURLImpl (FProxy :: FProxy tail) remaining
     where
       segment = reflectSymbol (SProxy :: SProxy segment)
+
+-- convert path param strings
+
+class ReadParam a where
+  readParam :: String -> Either String a
+
+instance stringReadParam :: ReadParam String where
+  readParam s = pure s
+
+instance intReadParam :: ReadParam Int where
+  readParam s =
+    case fromNumber $ readInt 10 s of
+      Just a -> pure a
+      Nothing ->
+        Left $ "could not parse " <> s <> " into integer"
+
+class ConvertRecord (i :: # Type) (o :: # Type) where
+  convertRecord :: { | i } -> Either String { | o}
+
+instance convertRecordInst ::
+  ( RL.RowToList o os
+  , ConvertRecordFields os i () o
+  ) => ConvertRecord i o where
+  convertRecord i
+      = Builder.build <@> {}
+    <$> convertRecordFields (RLProxy :: RLProxy os) i
+
+class ConvertRecordFields (os :: RL.RowList) (r :: # Type) (i :: # Type) (o :: # Type)
+  | os -> r i o
+  where
+    convertRecordFields
+      :: RLProxy os
+      -> { | r }
+      -> Either String (Builder { | i } { | o })
+
+instance nilConvertRecordFields :: ConvertRecordFields RL.Nil r () () where
+  convertRecordFields _ _ = pure identity
+
+instance consConvertRecordFields ::
+  ( IsSymbol name
+  , ReadParam ty
+  , Row.Cons name String r' r
+  , Row.Cons name ty from' to
+  , Row.Lacks name from'
+  , ConvertRecordFields tail r from from'
+  ) => ConvertRecordFields (RL.Cons name ty tail) r from to where
+  convertRecordFields _ r = do
+    value <- readParam str
+    let first = Builder.insert nameP value
+    rest <- convertRecordFields (RLProxy :: RLProxy tail) r
+    pure $ first <<< rest
+    where
+      nameP = SProxy :: SProxy name
+      name = reflectSymbol nameP
+      str = Record.get nameP r
